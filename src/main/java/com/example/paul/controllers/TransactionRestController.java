@@ -142,11 +142,11 @@ public class TransactionRestController {
             return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_TRANSACTION);
         }
 
-        builder.record(DecisionPath.AMOUNT_VALIDATION);
-        if (!isPositive(transactionInput.getAmount())) {
-            builder.record(DecisionPath.AMOUNT_INVALID);
-            return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_TRANSACTION_AMOUNT);
+        AmountValidationOutcome amountOutcome = applyAdvancedAmountValidation(transactionInput.getAmount(), builder);
+        if (!amountOutcome.isValid()) {
+            return builder.buildInvalid(HttpStatus.BAD_REQUEST, amountOutcome.getMessage());
         }
+        transactionInput.setAmount(amountOutcome.getNormalizedAmount());
 
         builder.record(DecisionPath.TRANSFER_ATTEMPT);
         boolean completed = transactionService.makeTransfer(transactionInput);
@@ -169,11 +169,11 @@ public class TransactionRestController {
             return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_SEARCH_CRITERIA);
         }
 
-        builder.record(DecisionPath.AMOUNT_VALIDATION);
-        if (!isPositive(withdrawInput.getAmount())) {
-            builder.record(DecisionPath.AMOUNT_INVALID);
-            return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_TRANSACTION_AMOUNT);
+        AmountValidationOutcome amountOutcome = applyAdvancedAmountValidation(withdrawInput.getAmount(), builder);
+        if (!amountOutcome.isValid()) {
+            return builder.buildInvalid(HttpStatus.BAD_REQUEST, amountOutcome.getMessage());
         }
+        withdrawInput.setAmount(amountOutcome.getNormalizedAmount());
 
         builder.record(DecisionPath.ACCOUNT_LOOKUP);
         Account account = accountService.getAccount(withdrawInput.getSortCode(), withdrawInput.getAccountNumber());
@@ -205,11 +205,11 @@ public class TransactionRestController {
             return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_SEARCH_CRITERIA);
         }
 
-        builder.record(DecisionPath.AMOUNT_VALIDATION);
-        if (!isPositive(depositInput.getAmount())) {
-            builder.record(DecisionPath.AMOUNT_INVALID);
-            return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_TRANSACTION_AMOUNT);
+        AmountValidationOutcome amountOutcome = applyAdvancedAmountValidation(depositInput.getAmount(), builder);
+        if (!amountOutcome.isValid()) {
+            return builder.buildInvalid(HttpStatus.BAD_REQUEST, amountOutcome.getMessage());
         }
+        depositInput.setAmount(amountOutcome.getNormalizedAmount());
 
         builder.record(DecisionPath.ACCOUNT_LOOKUP);
         Account account = accountService.getAccount(depositInput.getTargetAccountNo());
@@ -226,15 +226,54 @@ public class TransactionRestController {
         return builder.buildSuccess(SUCCESS, HttpStatus.OK);
     }
 
-    private boolean isPositive(double amount) {
-        return amount > 0;
+    private AmountValidationOutcome applyAdvancedAmountValidation(double amount,
+                                                                  OutcomeBuilder<?, DecisionPath> builder) {
+        builder.record(DecisionPath.AMOUNT_VALIDATION);
+        TransactionAmountValidator.ValidationResult result = TransactionAmountValidator.validate(amount);
+        if (!result.isValid()) {
+            builder.record(mapReasonToDecisionPath(result.getReason()));
+            return AmountValidationOutcome.invalid(mapReasonToMessage(result.getReason()));
+        }
+        if (result.isSanitized()) {
+            builder.record(DecisionPath.AMOUNT_SANITIZED);
+        }
+        return AmountValidationOutcome.valid(result.getNormalizedAmount().doubleValue());
+    }
+
+    private DecisionPath mapReasonToDecisionPath(TransactionAmountValidator.Reason reason) {
+        switch (reason) {
+            case INVALID_NUMBER:
+                return DecisionPath.AMOUNT_INVALID_FORMAT;
+            case BELOW_MINIMUM:
+                return DecisionPath.AMOUNT_TOO_SMALL;
+            case ABOVE_MAXIMUM:
+                return DecisionPath.AMOUNT_TOO_LARGE;
+            default:
+                throw new IllegalStateException("Unhandled reason " + reason);
+        }
+    }
+
+    private String mapReasonToMessage(TransactionAmountValidator.Reason reason) {
+        switch (reason) {
+            case INVALID_NUMBER:
+                return INVALID_TRANSACTION_AMOUNT_FORMAT;
+            case BELOW_MINIMUM:
+                return TRANSACTION_AMOUNT_TOO_SMALL;
+            case ABOVE_MAXIMUM:
+                return TRANSACTION_AMOUNT_TOO_LARGE;
+            default:
+                return INVALID_TRANSACTION_AMOUNT;
+        }
     }
 
     private enum DecisionPath {
         PRE_VALIDATION,
         VALIDATION_FAILED_GENERIC,
         AMOUNT_VALIDATION,
-        AMOUNT_INVALID,
+        AMOUNT_SANITIZED,
+        AMOUNT_INVALID_FORMAT,
+        AMOUNT_TOO_SMALL,
+        AMOUNT_TOO_LARGE,
         TRANSFER_ATTEMPT,
         TRANSFER_FAILED,
         ACCOUNT_LOOKUP,
@@ -243,5 +282,37 @@ public class TransactionRestController {
         INSUFFICIENT_FUNDS,
         BALANCE_UPDATE,
         RESULT_SUCCESS
+    }
+
+    private static final class AmountValidationOutcome {
+        private final boolean valid;
+        private final double normalizedAmount;
+        private final String message;
+
+        private AmountValidationOutcome(boolean valid, double normalizedAmount, String message) {
+            this.valid = valid;
+            this.normalizedAmount = normalizedAmount;
+            this.message = message;
+        }
+
+        static AmountValidationOutcome valid(double normalizedAmount) {
+            return new AmountValidationOutcome(true, normalizedAmount, null);
+        }
+
+        static AmountValidationOutcome invalid(String message) {
+            return new AmountValidationOutcome(false, 0d, message);
+        }
+
+        boolean isValid() {
+            return valid;
+        }
+
+        double getNormalizedAmount() {
+            return normalizedAmount;
+        }
+
+        String getMessage() {
+            return message;
+        }
     }
 }
