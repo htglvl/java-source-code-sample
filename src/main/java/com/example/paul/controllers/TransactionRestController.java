@@ -1,6 +1,9 @@
 package com.example.paul.controllers;
 
 import com.example.paul.constants.ACTION;
+import com.example.paul.controllers.workflow.OperationOutcome;
+import com.example.paul.controllers.workflow.OperationOutcomeType;
+import com.example.paul.controllers.workflow.OutcomeBuilder;
 import com.example.paul.models.Account;
 import com.example.paul.services.AccountService;
 import com.example.paul.services.TransactionService;
@@ -43,7 +46,7 @@ public class TransactionRestController {
             @Valid @RequestBody TransactionInput transactionInput) {
         LOGGER.debug("Triggered TransactionRestController.makeTransfer");
 
-        OperationOutcome<Boolean> outcome = evaluateTransfer(transactionInput);
+        OperationOutcome<Boolean, DecisionPath> outcome = evaluateTransfer(transactionInput);
         logOutcome(outcome, "transaction transfer");
         return convertOutcome(outcome,
                 INVALID_TRANSACTION,
@@ -58,7 +61,7 @@ public class TransactionRestController {
             @Valid @RequestBody WithdrawInput withdrawInput) {
         LOGGER.debug("Triggered TransactionRestController.withdraw");
 
-        OperationOutcome<String> outcome = evaluateWithdrawal(withdrawInput);
+        OperationOutcome<String, DecisionPath> outcome = evaluateWithdrawal(withdrawInput);
         logOutcome(outcome, "withdrawal");
         return convertOutcome(outcome,
                 NO_ACCOUNT_FOUND,
@@ -74,7 +77,7 @@ public class TransactionRestController {
             @Valid @RequestBody DepositInput depositInput) {
         LOGGER.debug("Triggered TransactionRestController.deposit");
 
-        OperationOutcome<String> outcome = evaluateDeposit(depositInput);
+        OperationOutcome<String, DecisionPath> outcome = evaluateDeposit(depositInput);
         logOutcome(outcome, "deposit");
         return convertOutcome(outcome,
                 NO_ACCOUNT_FOUND,
@@ -97,7 +100,7 @@ public class TransactionRestController {
         return errors;
     }
 
-    private ResponseEntity<?> convertOutcome(OperationOutcome<?> outcome,
+    private ResponseEntity<?> convertOutcome(OperationOutcome<?, DecisionPath> outcome,
                                              String emptyResultMessage,
                                              String invalidMessage,
                                              String failureMessage) {
@@ -115,7 +118,7 @@ public class TransactionRestController {
         }
     }
 
-    private Object resolveBody(OperationOutcome<?> outcome, String fallbackMessage) {
+    private Object resolveBody(OperationOutcome<?, DecisionPath> outcome, String fallbackMessage) {
         Object payload = outcome.getPayload();
         return payload != null ? payload : resolveMessage(outcome.getMessage(), fallbackMessage);
     }
@@ -124,15 +127,15 @@ public class TransactionRestController {
         return preferredMessage == null ? fallbackMessage : preferredMessage;
     }
 
-    private void logOutcome(OperationOutcome<?> outcome, String context) {
+    private void logOutcome(OperationOutcome<?, DecisionPath> outcome, String context) {
         if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("Outcome for {} -> type={}, status={}, trail={}",
                     context, outcome.getType(), outcome.getStatus(), outcome.getDecisionTrail());
         }
     }
 
-    private OperationOutcome<Boolean> evaluateTransfer(TransactionInput transactionInput) {
-        OutcomeBuilder<Boolean> builder = OutcomeBuilder.<Boolean>begin()
+    private OperationOutcome<Boolean, DecisionPath> evaluateTransfer(TransactionInput transactionInput) {
+        OutcomeBuilder<Boolean, DecisionPath> builder = OutcomeBuilder.<Boolean, DecisionPath>begin()
                 .record(DecisionPath.PRE_VALIDATION);
 
         if (!InputValidator.isSearchTransactionValid(transactionInput)) {
@@ -152,8 +155,8 @@ public class TransactionRestController {
         return builder.buildSuccess(Boolean.TRUE, HttpStatus.OK);
     }
 
-    private OperationOutcome<String> evaluateWithdrawal(WithdrawInput withdrawInput) {
-        OutcomeBuilder<String> builder = OutcomeBuilder.<String>begin()
+    private OperationOutcome<String, DecisionPath> evaluateWithdrawal(WithdrawInput withdrawInput) {
+        OutcomeBuilder<String, DecisionPath> builder = OutcomeBuilder.<String, DecisionPath>begin()
                 .record(DecisionPath.PRE_VALIDATION);
 
         if (!InputValidator.isSearchCriteriaValid(withdrawInput)) {
@@ -182,8 +185,8 @@ public class TransactionRestController {
         return builder.buildSuccess(SUCCESS, HttpStatus.OK);
     }
 
-    private OperationOutcome<String> evaluateDeposit(DepositInput depositInput) {
-        OutcomeBuilder<String> builder = OutcomeBuilder.<String>begin()
+    private OperationOutcome<String, DecisionPath> evaluateDeposit(DepositInput depositInput) {
+        OutcomeBuilder<String, DecisionPath> builder = OutcomeBuilder.<String, DecisionPath>begin()
                 .record(DecisionPath.PRE_VALIDATION);
 
         if (!InputValidator.isAccountNoValid(depositInput.getTargetAccountNo())) {
@@ -206,13 +209,6 @@ public class TransactionRestController {
         return builder.buildSuccess(SUCCESS, HttpStatus.OK);
     }
 
-    private enum OperationOutcomeType {
-        SUCCESS,
-        INVALID_INPUT,
-        EMPTY_RESULT,
-        FAILURE
-    }
-
     private enum DecisionPath {
         PRE_VALIDATION,
         VALIDATION_FAILED_GENERIC,
@@ -224,85 +220,5 @@ public class TransactionRestController {
         INSUFFICIENT_FUNDS,
         BALANCE_UPDATE,
         RESULT_SUCCESS
-    }
-
-    private static final class OperationOutcome<T> {
-        private final OperationOutcomeType type;
-        private final T payload;
-        private final HttpStatus status;
-        private final String message;
-        private final java.util.List<DecisionPath> decisionTrail;
-
-        private OperationOutcome(OperationOutcomeType type,
-                                 T payload,
-                                 HttpStatus status,
-                                 String message,
-                                 java.util.List<DecisionPath> decisionTrail) {
-            this.type = type;
-            this.payload = payload;
-            this.status = status;
-            this.message = message;
-            this.decisionTrail = decisionTrail;
-        }
-
-        public OperationOutcomeType getType() {
-            return type;
-        }
-
-        public T getPayload() {
-            return payload;
-        }
-
-        public HttpStatus getStatus() {
-            return status;
-        }
-
-        public String getMessage() {
-            return message;
-        }
-
-        public java.util.List<DecisionPath> getDecisionTrail() {
-            return decisionTrail;
-        }
-    }
-
-    private static final class OutcomeBuilder<T> {
-        private final java.util.List<DecisionPath> trail = new java.util.ArrayList<>();
-
-        private OutcomeBuilder() {
-        }
-
-        static <T> OutcomeBuilder<T> begin() {
-            return new OutcomeBuilder<>();
-        }
-
-        OutcomeBuilder<T> record(DecisionPath path) {
-            trail.add(path);
-            return this;
-        }
-
-        OperationOutcome<T> buildSuccess(T payload, HttpStatus status) {
-            return new OperationOutcome<>(OperationOutcomeType.SUCCESS, payload, status, null, copyTrail());
-        }
-
-        OperationOutcome<T> buildInvalid(HttpStatus status, String message) {
-            return new OperationOutcome<>(OperationOutcomeType.INVALID_INPUT, null, status, message, copyTrail());
-        }
-
-        OperationOutcome<T> buildEmpty(HttpStatus status, String message) {
-            return new OperationOutcome<>(OperationOutcomeType.EMPTY_RESULT, null, status, message, copyTrail());
-        }
-
-        OperationOutcome<T> buildFailure(HttpStatus status, String message) {
-            return buildFailure(null, status, message);
-        }
-
-        OperationOutcome<T> buildFailure(T payload, HttpStatus status, String message) {
-            return new OperationOutcome<>(OperationOutcomeType.FAILURE, payload, status, message, copyTrail());
-        }
-
-        private java.util.List<DecisionPath> copyTrail() {
-            return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(trail));
-        }
     }
 }

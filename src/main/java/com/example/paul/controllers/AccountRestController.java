@@ -1,6 +1,9 @@
 package com.example.paul.controllers;
 
 import com.example.paul.constants.constants;
+import com.example.paul.controllers.workflow.OperationOutcome;
+import com.example.paul.controllers.workflow.OperationOutcomeType;
+import com.example.paul.controllers.workflow.OutcomeBuilder;
 import com.example.paul.models.Account;
 import com.example.paul.services.AccountService;
 import com.example.paul.utils.AccountInput;
@@ -41,7 +44,7 @@ public class AccountRestController {
             @Valid @RequestBody AccountInput accountInput) {
         LOGGER.debug("Triggered AccountRestController.accountInput");
 
-        OperationOutcome<Account> outcome = evaluateAccountLookup(accountInput);
+        OperationOutcome<Account, DecisionPath> outcome = evaluateAccountLookup(accountInput);
         logOutcome(outcome, "account lookup");
         return convertOutcome(outcome,
                 constants.NO_ACCOUNT_FOUND,
@@ -57,7 +60,7 @@ public class AccountRestController {
             @Valid @RequestBody CreateAccountInput createAccountInput) {
         LOGGER.debug("Triggered AccountRestController.createAccountInput");
 
-        OperationOutcome<Account> outcome = evaluateAccountCreation(createAccountInput);
+        OperationOutcome<Account, DecisionPath> outcome = evaluateAccountCreation(createAccountInput);
         logOutcome(outcome, "account creation");
         return convertOutcome(outcome,
                 constants.CREATE_ACCOUNT_FAILED,
@@ -80,7 +83,7 @@ public class AccountRestController {
         return errors;
     }
 
-    private ResponseEntity<?> convertOutcome(OperationOutcome<?> outcome,
+    private ResponseEntity<?> convertOutcome(OperationOutcome<?, DecisionPath> outcome,
                                              String emptyResultMessage,
                                              String invalidMessage,
                                              String failureMessage) {
@@ -102,15 +105,15 @@ public class AccountRestController {
         return preferredMessage == null ? fallbackMessage : preferredMessage;
     }
 
-    private void logOutcome(OperationOutcome<?> outcome, String context) {
+    private void logOutcome(OperationOutcome<?, DecisionPath> outcome, String context) {
         if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("Outcome for {} -> type={}, status={}, trail={}",
                     context, outcome.getType(), outcome.getStatus(), outcome.getDecisionTrail());
         }
     }
 
-    private OperationOutcome<Account> evaluateAccountLookup(AccountInput accountInput) {
-        OutcomeBuilder<Account> builder = OutcomeBuilder.begin()
+    private OperationOutcome<Account, DecisionPath> evaluateAccountLookup(AccountInput accountInput) {
+        OutcomeBuilder<Account, DecisionPath> builder = OutcomeBuilder.<Account, DecisionPath>begin()
                 .record(DecisionPath.PRE_VALIDATION);
 
         String sanitizedSortCode = sanitizeAndRecord(accountInput.getSortCode(),
@@ -140,8 +143,8 @@ public class AccountRestController {
         return builder.buildSuccess(account, HttpStatus.OK);
     }
 
-    private OperationOutcome<Account> evaluateAccountCreation(CreateAccountInput createAccountInput) {
-        OutcomeBuilder<Account> builder = OutcomeBuilder.<Account>begin()
+    private OperationOutcome<Account, DecisionPath> evaluateAccountCreation(CreateAccountInput createAccountInput) {
+        OutcomeBuilder<Account, DecisionPath> builder = OutcomeBuilder.<Account, DecisionPath>begin()
                 .record(DecisionPath.PRE_VALIDATION);
 
         String sanitizedBankName = sanitizeAndRecord(createAccountInput.getBankName(),
@@ -175,7 +178,7 @@ public class AccountRestController {
         return value == null || value.trim().isEmpty();
     }
 
-    private <T> String sanitizeAndRecord(String value, DecisionPath path, OutcomeBuilder<T> builder) {
+    private <T> String sanitizeAndRecord(String value, DecisionPath path, OutcomeBuilder<T, DecisionPath> builder) {
         if (value == null) {
             return null;
         }
@@ -184,13 +187,6 @@ public class AccountRestController {
             builder.record(path);
         }
         return sanitized;
-    }
-
-    private enum OperationOutcomeType {
-        SUCCESS,
-        INVALID_INPUT,
-        EMPTY_RESULT,
-        FAILURE
     }
 
     private enum DecisionPath {
@@ -209,79 +205,4 @@ public class AccountRestController {
         CREATION_SUCCESS
     }
 
-    private static final class OperationOutcome<T> {
-        private final OperationOutcomeType type;
-        private final T payload;
-        private final HttpStatus status;
-        private final String message;
-        private final java.util.List<DecisionPath> decisionTrail;
-
-        private OperationOutcome(OperationOutcomeType type,
-                                T payload,
-                                HttpStatus status,
-                                String message,
-                                java.util.List<DecisionPath> decisionTrail) {
-            this.type = type;
-            this.payload = payload;
-            this.status = status;
-            this.message = message;
-            this.decisionTrail = decisionTrail;
-        }
-
-        public OperationOutcomeType getType() {
-            return type;
-        }
-
-        public T getPayload() {
-            return payload;
-        }
-
-        public HttpStatus getStatus() {
-            return status;
-        }
-
-        public String getMessage() {
-            return message;
-        }
-
-        public java.util.List<DecisionPath> getDecisionTrail() {
-            return decisionTrail;
-        }
-    }
-
-    private static final class OutcomeBuilder<T> {
-        private final java.util.List<DecisionPath> trail = new java.util.ArrayList<>();
-
-        private OutcomeBuilder() {
-        }
-
-        static <T> OutcomeBuilder<T> begin() {
-            return new OutcomeBuilder<>();
-        }
-
-        OutcomeBuilder<T> record(DecisionPath path) {
-            trail.add(path);
-            return this;
-        }
-
-        OperationOutcome<T> buildSuccess(T payload, HttpStatus status) {
-            return new OperationOutcome<>(OperationOutcomeType.SUCCESS, payload, status, null, copyTrail());
-        }
-
-        OperationOutcome<T> buildInvalid(HttpStatus status, String message) {
-            return new OperationOutcome<>(OperationOutcomeType.INVALID_INPUT, null, status, message, copyTrail());
-        }
-
-        OperationOutcome<T> buildEmpty(HttpStatus status, String message) {
-            return new OperationOutcome<>(OperationOutcomeType.EMPTY_RESULT, null, status, message, copyTrail());
-        }
-
-        OperationOutcome<T> buildFailure(HttpStatus status, String message) {
-            return new OperationOutcome<>(OperationOutcomeType.FAILURE, null, status, message, copyTrail());
-        }
-
-        private java.util.List<DecisionPath> copyTrail() {
-            return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(trail));
-        }
-    }
 }
