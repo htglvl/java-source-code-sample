@@ -25,7 +25,7 @@ import java.util.function.Supplier;
 import static com.example.paul.constants.constants.*;
 
 @RestController
-@RequestMapping("api/v1")
+@RequestMapping("/api/v1")
 public class TransactionRestController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TransactionRestController.class);
