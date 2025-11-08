@@ -22,7 +22,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.Supplier;
 
 import static com.example.paul.constants.constants.*;
 
@@ -174,13 +173,25 @@ public class TransactionRestController {
             return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_TRANSACTION_AMOUNT);
         }
 
-        return executeBalanceMutation(builder,
-                () -> accountService.getAccount(withdrawInput.getSortCode(), withdrawInput.getAccountNumber()),
-                ACTION.WITHDRAW,
-                withdrawInput.getAmount(),
-                true,
-                NO_ACCOUNT_FOUND,
-                INSUFFICIENT_ACCOUNT_BALANCE);
+        builder.record(DecisionPath.ACCOUNT_LOOKUP);
+        Account account = accountService.getAccount(withdrawInput.getSortCode(), withdrawInput.getAccountNumber());
+
+        if (account == null) {
+            builder.record(DecisionPath.RESULT_EMPTY);
+            return builder.buildEmpty(HttpStatus.OK, NO_ACCOUNT_FOUND);
+        }
+
+        builder.record(DecisionPath.BALANCE_CHECK);
+        if (!transactionService.isAmountAvailable(withdrawInput.getAmount(), account.getCurrentBalance())) {
+            builder.record(DecisionPath.INSUFFICIENT_FUNDS);
+            return builder.buildFailure(HttpStatus.OK, INSUFFICIENT_ACCOUNT_BALANCE);
+        }
+
+        builder.record(DecisionPath.BALANCE_UPDATE);
+        transactionService.updateAccountBalance(account, withdrawInput.getAmount(), ACTION.WITHDRAW);
+
+        builder.record(DecisionPath.RESULT_SUCCESS);
+        return builder.buildSuccess(SUCCESS, HttpStatus.OK);
     }
 
     private OperationOutcome<String, DecisionPath> evaluateDeposit(DepositInput depositInput) {
@@ -196,13 +207,19 @@ public class TransactionRestController {
             return builder.buildInvalid(HttpStatus.BAD_REQUEST, INVALID_TRANSACTION_AMOUNT);
         }
 
-        return executeBalanceMutation(builder,
-                () -> accountService.getAccount(depositInput.getTargetAccountNo()),
-                ACTION.DEPOSIT,
-                depositInput.getAmount(),
-                false,
-                NO_ACCOUNT_FOUND,
-                INVALID_SEARCH_CRITERIA);
+        builder.record(DecisionPath.ACCOUNT_LOOKUP);
+        Account account = accountService.getAccount(depositInput.getTargetAccountNo());
+
+        if (account == null) {
+            builder.record(DecisionPath.RESULT_EMPTY);
+            return builder.buildEmpty(HttpStatus.OK, NO_ACCOUNT_FOUND);
+        }
+
+        builder.record(DecisionPath.BALANCE_UPDATE);
+        transactionService.updateAccountBalance(account, depositInput.getAmount(), ACTION.DEPOSIT);
+
+        builder.record(DecisionPath.RESULT_SUCCESS);
+        return builder.buildSuccess(SUCCESS, HttpStatus.OK);
     }
 
     private boolean validateAndNormalizeAmount(java.util.function.DoubleConsumer sanitizer,
@@ -229,38 +246,6 @@ public class TransactionRestController {
         }
 
         return true;
-    }
-
-    private OperationOutcome<String, DecisionPath> executeBalanceMutation(
-            OutcomeBuilder<String, DecisionPath> builder,
-            Supplier<Account> accountSupplier,
-            ACTION action,
-            double amount,
-            boolean ensureFunds,
-            String emptyMessage,
-            String insufficientMessage) {
-
-        builder.record(DecisionPath.ACCOUNT_LOOKUP);
-        Account account = accountSupplier.get();
-
-        if (account == null) {
-            builder.record(DecisionPath.RESULT_EMPTY);
-            return builder.buildEmpty(HttpStatus.OK, emptyMessage);
-        }
-
-        if (ensureFunds) {
-            builder.record(DecisionPath.BALANCE_CHECK);
-            if (!transactionService.isAmountAvailable(amount, account.getCurrentBalance())) {
-                builder.record(DecisionPath.INSUFFICIENT_FUNDS);
-                return builder.buildFailure(HttpStatus.OK, insufficientMessage);
-            }
-        }
-
-        builder.record(DecisionPath.BALANCE_UPDATE);
-        transactionService.updateAccountBalance(account, amount, action);
-
-        builder.record(DecisionPath.RESULT_SUCCESS);
-        return builder.buildSuccess(SUCCESS, HttpStatus.OK);
     }
 
     private enum DecisionPath {
